@@ -61,7 +61,7 @@ analysis_expansion () {
     # Sed is used to ignore escaped colon (lemmas may contain it and interfere with the output from lt-expand)
     lt-expand "$1" \
         | sed '/\\:/b;/:[<>]:/b;s/:/:-:/g' \
-        | awk -v clb="$2" -F':[<->]:' '
+        | awk -v clb="$2" -F':[<>\\-]:' '
           /:<:/ {next}
           $2 ~ /<compound-(R|only-L)>|DUE_TO_LT_PROC_HANG|__REGEXP__/ {next}
           {
