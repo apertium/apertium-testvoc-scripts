@@ -105,15 +105,17 @@ analysis_expansion_hfst () {
 }
 
 only_errs () {
-    if [[ $# -ge 1 && $1 = --no-@ ]]; then
-        atfilter () { grep -v '].*/@'; }
-    else
-        atfilter () { cat; }
-    fi
     # turn escaped SOLIDUS into DIVISION SLASH, so we don't grep correct stuff ("A/S" is a possible lemma)
     sed 's%\\/%∕%g' |\
-        atfilter |\
         grep '][^<]*[#/]'
+}
+
+atfilter () {
+    if [[ $# -ge 1 && $1 = --no-@ ]]; then
+        grep -v '].*/@'
+    else
+        cat
+    fi
 }
 
 run_mode () {
@@ -144,11 +146,13 @@ split_ambig=$(mktemp -t gentestvoc.XXXXXXXXXXX)
 TMPFILES+=("${split_ambig}")
 cat >"${split_ambig}" <<EOF
 #!/usr/bin/env ${python}
-from streamparser import parse_file, readingToString, known
+from streamparser import parse_file, reading_to_string, known
 import sys
-for blank, lu in parse_file(sys.stdin, withText=True):
+import warnings
+warnings.filterwarnings("ignore", category=RuntimeWarning)
+for blank, lu in parse_file(sys.stdin, with_text=True):
     if lu.knownness == known:
-        print(blank+" ".join("^{}/{}\$".format(lu.wordform, readingToString(r))
+        print(blank+" ".join("^{}/{}\$".format(lu.wordform, reading_to_string(r))
                             for r in lu.readings),
             end="")
     else:
@@ -157,25 +161,26 @@ for blank, lu in parse_file(sys.stdin, withText=True):
 EOF
 chmod +x "${split_ambig}"
 
-# TODO: using modes.xml with gendebug="yes" should make these
 mode_after_analysis=$(mktemp -t gentestvoc.XXXXXXXXXXX)
 TMPFILES+=("${mode_after_analysis}")
-grep '|' modes/"${mode}".mode \
+grep '|' modes/"${mode}"-biltrans.mode \
     | sed 's/[^|]*|//' \
-    | sed 's/lt-proc -p[^|]*/cat/' \
-    | sed "s%autobil.bin'* *|%& ${split_ambig} |%" \
-    | sed 's/\$1/-d/g;s/\$2//g' \
     > "${mode_after_analysis}"
 
 mode_after_tagger=$(mktemp -t gentestvoc.XXXXXXXXXXX)
 TMPFILES+=("${mode_after_tagger}")
-grep '|' modes/"${mode}".mode \
+grep '|' modes/"${mode}"-biltrans.mode \
     | sed 's/[^|]*|//' \
     | sed 's/.*apertium-pretransfer/apertium-pretransfer/' \
-    | sed 's/lt-proc -p[^|]*/cat/' \
-    | sed "s%autobil.bin'* *|%& ${split_ambig} |%" \
-    | sed 's/\$1/-d/g;s/\$2//g' \
     > "${mode_after_tagger}"
+
+mode_after_bidix=$(mktemp -t gentestvoc.XXXXXXXXXXX)
+TMPFILES+=("${mode_after_bidix}")
+grep '|' modes/"${mode}".mode \
+    | sed 's/lt-proc -p[^|]*/cat/' \
+    | sed "s%.*autobil.bin'* *|% ${split_ambig} |%" \
+    | sed 's/\$1/-d/g;s/\$2//g' \
+    > "${mode_after_bidix}"
 # lt-proc -p fails, that's why we remove that
 
 
@@ -192,6 +197,8 @@ if $HFST; then
     fi
     analysis_expansion_hfst "${dix}" "${clb}" \
         | run_mode "${mode_after_tagger}"     \
+        | atfilter \
+        | run_mode "${mode_after_bidix}" \
         | only_errs
 else
     if [[ ${dix} = guess ]]; then
@@ -204,5 +211,7 @@ else
     cat "${dix}" > "${dixtmp}"
     analysis_expansion "${dixtmp}" "${clb}" \
         | run_mode "${mode_after_analysis}" \
-        | only_errs --no-@
+        | atfilter --no-@ \
+        | run_mode "${mode_after_bidix}" \
+        | only_errs
 fi
