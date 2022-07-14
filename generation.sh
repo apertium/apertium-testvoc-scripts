@@ -146,20 +146,44 @@ split_ambig=$(mktemp -t gentestvoc.XXXXXXXXXXX)
 TMPFILES+=("${split_ambig}")
 cat >"${split_ambig}" <<EOF
 #!/usr/bin/env ${python}
-from streamparser import parse_file, reading_to_string, known
 import sys
-import warnings
-warnings.filterwarnings("ignore", category=RuntimeWarning)
-for blank, lu in parse_file(sys.stdin, with_text=True):
-    if lu.knownness == known:
-        print(blank+" ".join("^{}/{}\$".format(lu.wordform, reading_to_string(r))
-                            for r in lu.readings),
-            end="")
-    else:
-        print(blank+"^"+lu.wordform+"/"+lu.knownness.symbol+lu.wordform+"$",
-              end="")
+from streamparser import parse, reading_to_string, known
+from itertools import product
+for line in sys.stdin:
+    units = list(parse(line, with_text=True))
+    exp = []
+    for unit in units:
+        uniq = []
+        for r in unit[1].readings:
+            uniq.append((unit[0], "^{}/{}$".format(unit[1].wordform, reading_to_string(r))))
+        exp.append(uniq)
+    for combination in product(*exp):
+        for t in combination:
+            print("".join(t), end="")
+        print("")
 EOF
 chmod +x "${split_ambig}"
+
+split_gen=$(mktemp -t gentestvoc.XXXXXXXXXXX)
+TMPFILES+=("${split_gen}")
+cat >"${split_gen}" <<EOF
+#!/usr/bin/env ${python}
+from streamparser import parse_file, reading_to_string, known
+import sys
+for blank, lu in parse_file(sys.stdin, with_text=True):
+    readings = {}
+    if lu.knownness == known:
+        for r in lu.readings:
+            tags = "_".join(sorted(r[0].tags))
+            if tags not in readings:
+                readings[tags] = r[0].baseform
+            else:
+                readings[tags] += "/"+r[0].baseform
+        print(blank+" ".join(readings.values()), end="")
+    else:
+        print(blank+reading_to_string(lu.readings[0]), end="")
+EOF
+chmod +x "${split_gen}"
 
 mode_after_analysis=$(mktemp -t gentestvoc.XXXXXXXXXXX)
 TMPFILES+=("${mode_after_analysis}")
@@ -176,13 +200,9 @@ grep '|' modes/"${mode}"-biltrans.mode \
 
 mode_after_bidix=$(mktemp -t gentestvoc.XXXXXXXXXXX)
 TMPFILES+=("${mode_after_bidix}")
-grep '|' modes/"${mode}".mode \
-    | sed 's/lt-proc -p[^|]*/cat/' \
+grep '|' modes/"${mode}"-dgen.mode \
     | sed "s%.*autobil.bin'* *|% ${split_ambig} |%" \
-    | sed 's/\$1/-d/g;s/\$2//g' \
     > "${mode_after_bidix}"
-# lt-proc -p fails, that's why we remove that
-
 
 lang1=${mode%%-*}
 
@@ -199,6 +219,7 @@ if $HFST; then
         | run_mode "${mode_after_tagger}"     \
         | atfilter \
         | run_mode "${mode_after_bidix}" \
+        | ${split_gen} \
         | only_errs
 else
     if [[ ${dix} = guess ]]; then
@@ -213,5 +234,6 @@ else
         | run_mode "${mode_after_analysis}" \
         | atfilter --no-@ \
         | run_mode "${mode_after_bidix}" \
+        | ${split_gen} \
         | only_errs
 fi
