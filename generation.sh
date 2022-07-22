@@ -16,35 +16,31 @@ declare -ir J=${J-1}
 # pipelines have memory leaks and need restarting every so often):
 declare -r BLOCK=${BLOCK:-100M}
 
+HFST=false
+UNTRIMMED=false
+EXCLUDE=""
+PRINT_ALL=false
 
-if [[ $# -ge 1 && $1 = --hfst ]]; then
-    HFST=true
-    shift
-else
-    HFST=false
-fi
-
-if [[ $# -eq 1 ]]; then
-    mode=$1
-    dix=guess
-elif  [[ $# -eq 2 ]]; then
-    mode=$1
-    dix=$2
-else
+show_help () {
     cat >&2 <<EOF
-Usage: $0 lang1-lang2
-or:    $0 lang1-lang2 foo.dix
-or:    $0 --hfst lang1-lang2 foo-bar.automorf.bin
+USAGE: $0 [ -a ] [-e 'string' ] [-u] lang1-lang2 [ source_dix ]
+or:    $0 [ -a ] [-e 'string' ] --hfst lang1-lang2 foo-bar.automorf.bin
+
+ -a, --all:       output all entries, not just errors
+ -H, --hfst:      use HFST for analysis
+ -e, --exclude:   exclude entries containing the specified string
+ -u, --untrimmed: run the pipeline without trimming (find @, non-HFST)
+ -h, --help:      show this help
 
 Replaces the first step of the pipeline with the expanded analyser and
 shows the resulting generation errors.
 
-For example, do \`$0 nno-nob' in trunk/apertium-nno-nob/' to find
+For example, do '$0 nno-nob' in 'apertium-nno-nob' to find
 generation errors in the nno-nob direction (assumes that
 modes/nno-nob.mode exists).
 
 If the source .dix file has a non-standard name, you can specify it in
-the second argument, for example \`$0 eng-sco
+the second argument, for example '$0 eng-sco
 ../apertium-eng_feil/apertium-eng.eng.dix'
 
 If you pass --hfst, the trimmed analyser will be used, and
@@ -55,6 +51,51 @@ name of the first program of the mode).
 
 EOF
     exit 1
+}
+
+while :; do
+    if [ $# -eq 0 ]; then
+        show_help
+    fi
+    case $1 in
+        -a|--all)
+            PRINT_ALL=true
+            ;;
+        -e|--exclude)
+            if [ "$2" ]; then
+                EXCLUDE="$2"
+                shift
+            else
+                die 'ERROR: "--exclude" requires a non-empty option argument.'
+            fi
+            ;;
+        -h|-\?|--help)
+            show_help
+            ;;
+        -H|--hfst)
+            HFST=true
+            ;;
+        -u|--untrimmed)
+            UNTRIMMED=true
+            ;;
+        --)
+            shift
+            break
+            ;;
+        *)
+            break
+    esac
+    shift
+done
+
+if [[ $# -eq 1 ]]; then
+    mode=$1
+    dix=guess
+elif  [[ $# -eq 2 ]]; then
+    mode=$1
+    dix=$2
+else
+    show_help
 fi
 
 analysis_expansion () {
@@ -105,14 +146,26 @@ analysis_expansion_hfst () {
 }
 
 only_errs () {
-    # turn escaped SOLIDUS into DIVISION SLASH, so we don't grep correct stuff ("A/S" is a possible lemma)
-    sed 's%\\/%∕%g' |\
+    if [[ $PRINT_ALL = true ]]; then
+        cat
+    else
+        # turn escaped SOLIDUS into DIVISION SLASH, so we don't grep correct stuff ("A/S" is a possible lemma)
+        sed 's%\\/%∕%g' |\
         grep '][^<]*[#/]'
+    fi
 }
 
 atfilter () {
-    if [[ $# -ge 1 && $1 = --no-@ ]]; then
+    if [[ $UNTRIMMED = true ]]; then
+        cat
+    else
         grep -v '].*/@'
+    fi
+}
+
+exclude_analysis () {
+    if [[ "$EXCLUDE" ]]; then
+        grep -v $EXCLUDE
     else
         cat
     fi
@@ -216,8 +269,8 @@ if $HFST; then
         dix=$(xmllint --xpath "string(/modes/mode[@name = '${mode}']/pipeline/program[1]/file[1]/@name)" modes.xml)
     fi
     analysis_expansion_hfst "${dix}" "${clb}" \
+        | exclude_analysis \
         | run_mode "${mode_after_tagger}"     \
-        | atfilter \
         | run_mode "${mode_after_bidix}" \
         | ${split_gen} \
         | only_errs
@@ -231,8 +284,9 @@ else
     TMPFILES+=("${dixtmp}")
     cat "${dix}" > "${dixtmp}"
     analysis_expansion "${dixtmp}" "${clb}" \
+        | exclude_analysis \
         | run_mode "${mode_after_analysis}" \
-        | atfilter --no-@ \
+        | atfilter \
         | run_mode "${mode_after_bidix}" \
         | ${split_gen} \
         | only_errs
