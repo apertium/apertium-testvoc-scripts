@@ -98,6 +98,15 @@ else
     show_help
 fi
 
+pairdir=$(pwd)
+for i in {1..3}; do
+    if [[ -e $pairdir/modes.xml ]]; then
+        break
+    fi
+    cd '..'
+    pairdir=$(pwd)
+done
+
 analysis_expansion () {
     # Sed is used to ignore escaped colon (lemmas may contain it and interfere with the output from lt-expand)
     lt-expand "$1" \
@@ -106,11 +115,7 @@ analysis_expansion () {
           /:<:/ {next}
           $2 ~ /<compound-(R|only-L)>|DUE_TO_LT_PROC_HANG|__REGEXP__/ {next}
           {
-            esc=$2
-            gsub("/","\\/",esc)
-            gsub("^","\\^",esc)
-            gsub("$","\\$",esc)
-            print "["esc"] ^"$1"/"$2"$ ^./.<sent>"clb"$"
+            print "["$2"] ^"$1"/"$2"$ ^./.<sent>"clb"$"
           }'
 }
 
@@ -136,22 +141,18 @@ analysis_expansion_hfst () {
           /<compound-(R|only-L)>|DUE_TO_LT_PROC_HANG|__REGEXP__/ {next}
           {
             gsub("]","\\]")
-            esc=$0
-            gsub("/","\\/",esc)
-            gsub("^","\\^",esc)
-            gsub("$","\\$",esc)
-            print "["esc"] ^"$0"$ ^.<sent>"clb"$"
+            print "["$0"] ^"$0"$ ^.<sent>"clb"$"
           }'
     # give the "disambiguated" output, no forms
 }
 
 only_errs () {
+    # turn escaped SOLIDUS into DIVISION SLASH, so we don't grep correct stuff ("A/S" is a possible lemma)
+    sed 's%\\/%∕%g'
     if [[ $PRINT_ALL = true ]]; then
         cat
     else
-        # turn escaped SOLIDUS into DIVISION SLASH, so we don't grep correct stuff ("A/S" is a possible lemma)
-        sed 's%\\/%∕%g' |\
-        grep '][^<]*[#/]'
+        grep -e ' #' -e ' @' -e '/'
     fi
 }
 
@@ -240,20 +241,20 @@ chmod +x "${split_gen}"
 
 mode_after_analysis=$(mktemp -t gentestvoc.XXXXXXXXXXX)
 TMPFILES+=("${mode_after_analysis}")
-grep '|' modes/"${mode}"-biltrans.mode \
+grep '|' $pairdir/modes/"${mode}"-biltrans.mode \
     | sed 's/[^|]*|//' \
     > "${mode_after_analysis}"
 
 mode_after_tagger=$(mktemp -t gentestvoc.XXXXXXXXXXX)
 TMPFILES+=("${mode_after_tagger}")
-grep '|' modes/"${mode}"-biltrans.mode \
+grep '|' $pairdir/modes/"${mode}"-biltrans.mode \
     | sed 's/[^|]*|//' \
     | sed 's/.*apertium-pretransfer/apertium-pretransfer/' \
     > "${mode_after_tagger}"
 
 mode_after_bidix=$(mktemp -t gentestvoc.XXXXXXXXXXX)
 TMPFILES+=("${mode_after_bidix}")
-grep '|' modes/"${mode}"-dgen.mode \
+grep '|' $pairdir/modes/"${mode}"-dgen.mode \
     | sed "s%.*autobil.bin'* *|% ${split_ambig} |%" \
     > "${mode_after_bidix}"
 
@@ -266,7 +267,7 @@ esac
 
 if $HFST; then
     if [[ ${dix} = guess ]]; then
-        dix=$(xmllint --xpath "string(/modes/mode[@name = '${mode}']/pipeline/program[1]/file[1]/@name)" modes.xml)
+        dix=$(xmllint --xpath "string(/modes/mode[@name = '${mode}']/pipeline/program[1]/file[1]/@name)" $pairdir/modes.xml)
     fi
     analysis_expansion_hfst "${dix}" "${clb}" \
         | exclude_analysis \
@@ -276,8 +277,11 @@ if $HFST; then
         | only_errs
 else
     if [[ ${dix} = guess ]]; then
-        lang1dir=$(grep -m1 "^AP_SRC.*apertium-${lang1}" config.log | sed "s/^[^=]*='//;s/'$//")
+        lang1dir=$(grep -m1 "^AP_SRC.*apertium-${lang1}" $pairdir/config.log | sed "s/^[^=]*='//;s/'$//")
         dix=${lang1dir}/apertium-${lang1}.${lang1}.dix
+        if ! [[ -e $dix ]]; then
+            dix=${lang1dir}/.deps/apertium-${lang1}.${lang1}.dix
+        fi
     fi
     # Make it possible to edit the .dix while testvoc is running:
     dixtmp=$(mktemp -t gentestvoc.XXXXXXXXXXX)
