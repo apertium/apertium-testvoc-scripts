@@ -88,7 +88,7 @@ find_duplicates () {
     else
         # Check only generation, taking preferences into account
         grep "<--" \
-        | sed -E 's/(<[^ ]*>)([^\t]*\t.*)/\1\2\t\1/' \
+        | sed -E 's/(<[^ ]*>)(([^\t<]*)(<[^ ]*>)*)(\t.*)/\1\2\5\t\1\4/' \
         | awk -F'\t' 'a[$2$3$4]++ {print $1 " " $2 " " $3}'
     fi
 }
